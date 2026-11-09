@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<!--
+  SECRET AGENT — a Spyfall / Undercover style party game. Single file, no build step.
+
+  HOSTING: put this file in a GitHub repo as index.html -> Settings > Pages > Deploy from branch (main, /root).
+  ONLINE MODE: uses PeerJS (WebRTC). The host's phone acts as the server; friends join with the 4-letter code.
+  OFFLINE MODE: "Pass the Phone" needs no network after the page has loaded.
+
+  CUSTOMISE:
+   - Add a category or words: edit the CATS object in the <script> below.
+   - Change default timer: edit `mins` in newGame().  Timer buttons: edit the [3,5,8,10] list in lobby().
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1120">
+<title>Secret Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{--bg:#0d1120;--card:#171d33;--card2:#222a47;--tx:#eef0fa;--mut:#8d95b8;--acc:#ffb84d;--grn:#37d6a0;--red:#ff5a6a}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#app{max-width:480px;margin:0 auto;min-height:100vh;padding:max(16px,env(safe-area-inset-top)) 16px max(28px,env(safe-area-inset-bottom))}
+h1{font-size:30px;line-height:1.15;margin:10px 0 6px;letter-spacing:-.5px}
+h2{font-size:18px;margin:0 0 10px}
+p{margin:6px 0}
+.mut{color:var(--mut);font-size:14px}
+.card{background:var(--card);border-radius:22px;padding:18px;margin:14px 0}
+.err{background:#3b1822;color:#ffc9cf}
+.btn{display:block;width:100%;border:0;border-radius:18px;padding:18px;margin:10px 0;font-size:17px;font-weight:700;font-family:inherit;color:#1a1305;background:var(--acc);cursor:pointer}
+.btn:active{transform:scale(.98)}
+.btn.alt{background:var(--card2);color:var(--tx)}
+.btn.red{background:var(--red);color:#fff}
+.btn:disabled{opacity:.4;pointer-events:none}
+input,textarea{width:100%;padding:16px;margin:6px 0;border-radius:14px;border:2px solid var(--card2);background:var(--bg);color:var(--tx);font-size:18px;font-family:inherit}
+input:focus,textarea:focus,.btn:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.code{font-size:60px;font-weight:800;letter-spacing:12px;text-align:center;color:var(--acc);padding-left:12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:11px 15px;border-radius:99px;background:var(--card2);font-size:15px;cursor:pointer;border:2px solid transparent;user-select:none}
+.chip.on{border-color:var(--acc);color:var(--acc)}
+.timer{font-size:56px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums}
+.hold{min-height:170px;border-radius:24px;background:var(--card2);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:800;font-size:22px;padding:14px;border:2px dashed var(--mut);margin:14px 0;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none}
+.hold .sec{display:none}
+.hold.on{background:#2b2350;border:2px solid var(--acc)}
+.hold.on .sec{display:block}.hold.on .lbl{display:none}
+.spy{color:var(--red)}
+.words{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.w{background:var(--card2);padding:11px 6px;border-radius:14px;font-size:14px;text-align:center;cursor:pointer;user-select:none}
+.w.x{opacity:.3;text-decoration:line-through}
+.words.g .w{outline:2px solid var(--acc)}
+.pl{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--card2)}
+.pl:last-child{border:0}
+.win{font-size:32px;font-weight:800;text-align:center;margin-top:14px}
+.link{text-align:center;color:var(--mut);font-size:14px;margin-top:20px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ===================== WORD CATEGORIES =====================
+   To add a category: copy one line, give it a name, an emoji icon and a list of words.
+   To add words: just append them to the words array. Use 8+ words per category.
+   Classic mode uses one word as the secret. Undercover mode uses two different words
+   from the same category (agents get one, the spy gets the other). */
+const CATS = {
+  "Popular Places": {icon:"📍", words:["Airport","Beach","Casino","Hospital","Library","Cinema","School","Supermarket","Zoo","Train Station","Hotel","Bank","Circus","Space Station","Pirate Ship","Gym"]},
+  "Movies":         {icon:"🎬", words:["Titanic","Avengers","Inception","Frozen","Shrek","Jaws","Sholay","3 Idiots","Lion King","Toy Story","Matrix","Jurassic Park","Dangal","Harry Potter","Interstellar","Baahubali"]},
+  "Food & Dishes":  {icon:"🍕", words:["Pizza","Burger","Biryani","Sushi","Pasta","Tacos","Dosa","Pav Bhaji","Samosa","Ramen","Pancakes","Fries","Paneer Tikka","Ice Cream","Sandwich","Noodles"]},
+  "Superheroes":    {icon:"🦸", words:["Superman","Batman","Spider-Man","Iron Man","Thor","Hulk","Wonder Woman","Black Panther","Captain America","Flash","Aquaman","Wolverine","Doctor Strange","Deadpool","Shaktiman","Krrish"]},
+  "Animals":        {icon:"🐾", words:["Lion","Elephant","Dolphin","Penguin","Tiger","Giraffe","Kangaroo","Panda","Wolf","Eagle","Shark","Monkey","Camel","Octopus","Peacock","Crocodile"]},
+  "Sports":         {icon:"⚽", words:["Cricket","Football","Tennis","Badminton","Hockey","Basketball","Kabaddi","Chess","Swimming","Boxing","Golf","Volleyball","Baseball","Rugby","Table Tennis","Archery"]}
+};
+
+/* ===================== STATE ===================== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const rnd = a => a[Math.floor(Math.random() * a.length)];
+const PRE = 'secretagent-';
+const CN = Object.keys(CATS);
+let G = null;            // full game state — exists only on the host's phone (or in Pass-the-Phone mode)
+let V = null;            // the view this device renders (what this player is allowed to see)
+let peer = null, conn = null;
+let screen = 'home', err = '', N = '', C = '', held = false, guessing = false;
+
+function newGame(local){
+  return {local, code:'', players:[], phase:'lobby', votes:{}, pi:0,
+          cfg:{cats:[CN[0]], sub:'classic', mins:8}};   // <- default timer minutes
+}
+
+/* ===================== HOST LOGIC ===================== */
+const nm = id => (G.players.find(p => p.id === id) || {}).name || '?';
+
+function roleFor(id){
+  if(!G.secret || id == null) return null;
+  const spy = id === G.spy;
+  if(G.cfg.sub === 'classic')
+    return spy ? {spy:true, text:'YOU ARE THE SPY', sub:'Category: '+G.cat+'. Work out the secret word!'}
+               : {text:G.secret, sub:'Category: '+G.cat+'. Find the Spy!'};
+  return {text: spy ? G.alt : G.secret, sub:'Your secret word. Blend in!'};
+}
+
+// Builds what ONE player may see — secrets of other players never leave the host.
+function view(id){
+  const g = G;
+  return {phase:g.phase, local:g.local, code:g.code, cfg:g.cfg, endAt:g.endAt, cat:g.cat, words:g.words, pi:g.pi, you:id,
+    host:id === 'host',
+    players:g.players.map(p => ({id:p.id, name:p.name, voted:p.id in g.votes, gone:p.gone})),
+    role: g.local ? (g.phase === 'pass' ? roleFor(g.players[g.pi].id) : null) : roleFor(id),
+    canGuess: !g.local && g.cfg.sub === 'classic' && id === g.spy && g.phase === 'play',
+    result: g.phase === 'over' ? g.result : null};
+}
+
+function sync(){
+  if(!G) return;
+  G.players.forEach(p => { if(p.conn && p.conn.open) p.conn.send({t:'s', v:view(p.id)}); });
+  V = view('host'); screen = 'game'; render();
+}
+
+function startGame(){
+  if(G.players.length < 3) return;
+  G.cat = rnd(G.cfg.cats); G.words = CATS[G.cat].words;
+  G.secret = rnd(G.words); do { G.alt = rnd(G.words); } while(G.alt === G.secret);
+  G.spy = rnd(G.players).id; G.votes = {}; G.result = null; G.pi = 0;
+  G.endAt = Date.now() + G.cfg.mins * 60000;
+  G.phase = G.local ? 'pass' : 'play'; guessing = false; sync();
+}
+
+function startVote(){ G.phase = 'vote'; G.votes = {}; sync(); }
+
+function finish(win, why, t){
+  G.phase = 'over';
+  G.result = {win, why, spy:nm(G.spy), secret:G.secret, cat:G.cat,
+              alt: G.cfg.sub === 'undercover' ? G.alt : null,
+              tally: Object.entries(t || {}).map(([k,n]) => [nm(k), n])};
+  sync();
+}
+
+function resolve(){
+  const t = {}; Object.values(G.votes).forEach(v => t[v] = (t[v] || 0) + 1);
+  const mx = Math.max(0, ...Object.values(t));
+  const top = Object.keys(t).filter(k => t[k] === mx);
+  const caught = top.length === 1 ? top[0] : null;
+  if(caught === G.spy) finish('agents', 'The Spy was caught!', t);
+  else finish('spy', caught ? nm(caught)+' was innocent. The Spy escapes!' : 'The vote was tied. The Spy escapes!', t);
+}
+
+// every player action (host's own or received over the network) goes through here
+function act(id, m){
+  const g = G, h = id === 'host';
+  if(m.t === 'call' && g.phase === 'play') startVote();
+  else if(m.t === 'vote' && g.phase === 'vote'){
+    g.votes[id] = m.to;
+    if(g.local || g.players.every(p => p.gone || p.id in g.votes)) resolve(); else sync();
+  }
+  else if(m.t === 'guess' && g.phase === 'play' && id === g.spy && g.cfg.sub === 'classic'){
+    const ok = m.w === g.secret;
+    finish(ok ? 'spy' : 'agents', ok ? 'The Spy guessed the word: '+g.secret+'!' : 'The Spy guessed "'+m.w+'". Wrong!');
+  }
+  else if(m.t === 'force' && h && g.phase === 'vote') resolve();
+  else if(m.t === 'again' && h){ g.phase = 'lobby'; g.secret = null; g.votes = {}; g.result = null; guessing = false; sync(); }
+  else if(m.t === 'next' && h && g.local && g.phase === 'pass'){
+    if(++g.pi >= g.players.length){ g.phase = 'play'; g.endAt = Date.now() + g.cfg.mins * 60000; }
+    sync();
+  }
+}
+
+const send = m => G ? act('host', m) : conn && conn.send(m);
+
+/* ===================== NETWORKING ===================== */
+function fail(msg){
+  err = msg; try{ peer && peer.destroy(); }catch(e){}
+  peer = conn = G = V = null; screen = 'home'; render();
+}
+
+function create(){
+  G = newGame(false);
+  const attempt = () => {
+    const code = Array.from({length:4}, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.random()*24|0]).join('');
+    peer = new Peer(PRE + code);
+    peer.on('open', () => { G.code = code; G.players = [{id:'host', name:N.trim()}]; sync(); });
+    peer.on('connection', hostConn);
+    peer.on('error', e => { if(e.type === 'unavailable-id'){ peer.destroy(); attempt(); } else fail('Could not create room ('+e.type+'). Try again.'); });
+  };
+  attempt();
+}
+
+function hostConn(c){
+  let p = null;
+  c.on('data', m => {
+    if(m.t === 'join'){
+      if(G.phase !== 'lobby') return c.send({t:'err', m:'That game has already started.'});
+      if(G.players.length >= 12) return c.send({t:'err', m:'Room is full (12 players max).'});
+      let name = String(m.name || 'Player').trim().slice(0,14) || 'Player', base = name, i = 2;
+      while(G.players.some(x => x.name === name)) name = base+' '+(i++);
+      p = {id:c.peer, name, conn:c}; G.players.push(p); sync();
+    } else if(p) act(p.id, m);
+  });
+  c.on('close', () => {
+    if(!p) return;
+    if(G.phase === 'lobby') G.players = G.players.filter(x => x !== p); else p.gone = true;
+    if(G.phase === 'vote' && G.players.every(x => x.gone || x.id in G.votes)) resolve(); else sync();
+  });
+}
+
+function join(){
+  peer = new Peer();
+  const timer = setTimeout(() => { if(screen === 'busy') fail('Could not reach the room. Check the code and your connection.'); }, 12000);
+  peer.on('error', e => fail(e.type === 'peer-unavailable' ? 'Room not found. Check the code.' : 'Connection error ('+e.type+').'));
+  peer.on('open', () => {
+    conn = peer.connect(PRE + C, {reliable:true});
+    conn.on('open', () => conn.send({t:'join', name:N.trim()}));
+    conn.on('data', m => {
+      if(m.t === 's'){ clearTimeout(timer); if(V && V.phase !== 'play' && m.v.phase === 'play') guessing = false; V = m.v; screen = 'game'; render(); }
+      if(m.t === 'err') fail(m.m);
+    });
+    conn.on('close', () => fail('Disconnected from the host.'));
+  });
+}
+
+/* ===================== UI ACTIONS ===================== */
+function doCreate(){ if(!N.trim()) return flash('Enter your name first.'); err = ''; screen = 'busy'; render(); create(); }
+function doJoin(){
+  if(!N.trim()) return flash('Enter your name first.');
+  if(C.length !== 4) return flash('Room codes have 4 letters.');
+  err = ''; screen = 'busy'; render(); join();
+}
+function flash(m){ err = m; render(); }
+function doLocal(){
+  const names = [...new Set($('#names').value.split(/[\n,]/).map(s => s.trim().slice(0,14)).filter(Boolean))];
+  if(names.length < 3 || names.length > 12) return flash('Enter 3 to 12 different names.');
+  err = ''; G = newGame(true); G.players = names.map((n,i) => ({id:'p'+i, name:n})); sync();
+}
+function tc(i){
+  const l = G.cfg.cats, c = CN[i];
+  if(l.includes(c)){ if(l.length > 1) l.splice(l.indexOf(c), 1); } else l.push(c);
+  sync();
+}
+function setSub(s){ G.cfg.sub = s; sync(); }
+function setMins(m){ G.cfg.mins = m; sync(); }
+function vt(i){ send({t:'vote', to:V.players[i].id}); }
+function wc(i, el){
+  if(guessing){ const w = V.words[i]; if(confirm('Final guess: "'+w+'"?')){ guessing = false; send({t:'guess', w}); } }
+  else el.classList.toggle('x');
+}
+
+/* ===================== RENDERING ===================== */
+function render(){
+  $('#app').innerHTML = screen === 'home' ? home() : screen === 'local' ? localSetup()
+    : screen === 'busy' ? '<div class="card"><h2>Connecting…</h2><p class="mut">Contacting the room.</p></div>'
+    : V ? game() : '';
+}
+const errBox = () => err ? `<div class="card err">${esc(err)}</div>` : '';
+
+function home(){ return `
+  <h1>🕵️ Secret Agent</h1><p class="mut">One of you is the spy. Can you find them, or blend in?</p>${errBox()}
+  <div class="card"><h2>Play on separate phones</h2>
+    <input placeholder="Your name" maxlength="14" value="${esc(N)}" oninput="N=this.value" autocomplete="off">
+    <button class="btn" onclick="doCreate()">Create room</button>
+    <input placeholder="ROOM CODE" maxlength="4" value="${esc(C)}" autocapitalize="characters" autocomplete="off"
+      oninput="C=this.value.toUpperCase().replace(/[^A-Z]/g,'');this.value=C" style="text-align:center;letter-spacing:8px;font-weight:700">
+    <button class="btn alt" onclick="doJoin()">Join room</button></div>
+  <button class="btn alt" onclick="screen='local';err='';render()">📱 Pass the phone (one device, offline)</button>`; }
+
+function localSetup(){ return `
+  <h1>Pass the phone</h1><p class="mut">Everyone shares this phone. Each player secretly views their role in turn.</p>${errBox()}
+  <div class="card"><h2>Players</h2><textarea id="names" rows="6" placeholder="One name per line (3 to 12)"></textarea></div>
+  <button class="btn" onclick="doLocal()">Continue</button>
+  <button class="btn alt" onclick="screen='home';err='';render()">Back</button>`; }
+
+function holdBox(r){
+  if(!r) return '';
+  return `<div class="hold${held ? ' on' : ''}" data-hold>
+    <div class="lbl">👆 Press &amp; hold<br>to reveal secret</div>
+    <div class="sec"><div class="${r.spy ? 'spy' : ''}" style="font-size:${r.text.length > 14 ? 24 : 34}px">${esc(r.text)}</div>
+    <div class="mut" style="font-weight:400;margin-top:8px">${esc(r.sub)}</div></div></div>`;
+}
+
+function game(){
+  return {lobby, pass, play, vote, over}[V.phase]();
+}
+
+function lobby(){
+  const c = V.cfg, cl = c.sub === 'classic';
+  const leave = '<div class="link" onclick="location.reload()">Leave game</div>';
+  const list = `<div class="card"><h2>Players (${V.players.length})</h2>${V.players.map(p =>
+    `<div class="pl"><span>${esc(p.name)}${p.id === V.you && !V.local ? ' (you)' : ''}</span><span class="mut">${p.id === 'host' && !V.local ? '👑 host' : ''}</span></div>`).join('')}</div>`;
+  const head = V.local ? '<h1>Game setup</h1>'
+    : `<h1>Lobby</h1><div class="card"><div class="mut" style="text-align:center">Room code</div><div class="code">${V.code}</div></div>`;
+  if(!V.host) return head + list + `<div class="card"><h2>Waiting for the host…</h2>
+    <p class="mut">${cl ? 'Classic Spyfall' : 'Undercover'} · ${c.mins} min · ${c.cats.map(x => CATS[x].icon+' '+esc(x)).join(', ')}</p></div>` + leave;
+  return head + list + `
+  <div class="card"><h2>Categories</h2><div class="chips">${CN.map((x,i) =>
+    `<div class="chip${c.cats.includes(x) ? ' on' : ''}" onclick="tc(${i})">${CATS[x].icon} ${esc(x)}</div>`).join('')}</div></div>
+  <div class="card"><h2>Mode</h2><div class="chips">
+    <div class="chip${cl ? ' on' : ''}" onclick="setSub('classic')">🕵️ Classic Spyfall</div>
+    <div class="chip${cl ? '' : ' on'}" onclick="setSub('undercover')">🎭 Undercover</div></div>
+    <p class="mut">${cl ? 'Agents get the secret word. The Spy only sees “YOU ARE THE SPY”.' : 'Agents get Word A, the Spy secretly gets a similar Word B and doesn’t know it.'}</p></div>
+  <div class="card"><h2>Timer</h2><div class="chips">${[3,5,8,10].map(m =>
+    `<div class="chip${c.mins === m ? ' on' : ''}" onclick="setMins(${m})">${m} min</div>`).join('')}</div></div>
+  <button class="btn" onclick="startGame()" ${V.players.length < 3 ? 'disabled' : ''}>Start game</button>
+  ${V.players.length < 3 ? '<p class="mut" style="text-align:center">Need at least 3 players.</p>' : ''}` +
+  (V.local ? '<button class="btn alt" onclick="G=null;V=null;screen=\'local\';render()">Change players</button>' : '') + leave;
+}
+
+function pass(){
+  const last = V.pi === V.players.length - 1;
+  return `<p class="mut" style="text-align:center">Player ${V.pi+1} of ${V.players.length}</p>
+    <h1 style="text-align:center">Pass the phone to<br>${esc(V.players[V.pi].name)}</h1>${holdBox(V.role)}
+    <button class="btn" onclick="send({t:'next'})">${last ? 'Everyone has seen it. Start!' : 'Hide and pass on'}</button>`;
+}
+
+function play(){
+  const words = V.words.map((w,i) => `<div class="w" onclick="wc(${i},this)">${esc(w)}</div>`).join('');
+  return `<div class="card"><div class="mut" style="text-align:center">Time left</div><div class="timer" id="tm">--:--</div></div>
+    ${V.role ? holdBox(V.role) : '<div class="card"><p>Everyone has their secret. Take turns asking each other questions.</p></div>'}
+    <div class="card"><h2>${CATS[V.cat].icon} ${esc(V.cat)}</h2>
+      <p class="mut">${guessing ? 'Tap the word to make your final guess.' : 'Tap a word to cross it off.'}</p>
+      <div class="words${guessing ? ' g' : ''}">${words}</div></div>
+    ${V.canGuess ? `<button class="btn alt" onclick="guessing=!guessing;render()">🎯 ${guessing ? 'Cancel guess' : 'I know the word'}</button>` : ''}
+    <button class="btn red" onclick="send({t:'call'})">🚨 Call a vote</button>`;
+}
+
+function vote(){
+  const me = V.players.find(p => p.id === V.you), n = V.players.filter(p => !p.gone), d = n.filter(p => p.voted).length;
+  const btns = V.players.map((p,i) => (p.gone || (!V.local && p.id === V.you)) ? '' :
+    `<button class="btn alt" onclick="vt(${i})" ${!V.local && me && me.voted ? 'disabled' : ''}>${esc(p.name)}</button>`).join('');
+  return `<h1>🗳️ Who is the Spy?</h1>
+    <p class="mut">${V.local ? 'Agree as a group, then tap the player you accuse.' : me && me.voted ? 'Vote locked in ✓ Waiting for the others…' : 'Tap the player you suspect.'}</p>
+    ${btns}${V.local ? '' : `<p class="mut" style="text-align:center">${d} of ${n.length} voted</p>`}
+    ${V.host && !V.local ? '<button class="btn red" onclick="send({t:\'force\'})">Show result now</button>' : ''}`;
+}
+
+function over(){
+  const r = V.result, ag = r.win === 'agents';
+  return `<div class="win" style="color:var(${ag ? '--grn' : '--red'})">${ag ? '🎉 Agents win!' : '🕵️ The Spy wins!'}</div>
+    <p style="text-align:center">${esc(r.why)}</p>
+    <div class="card"><h2>The reveal</h2>
+      <div class="pl"><span>Spy</span><b>${esc(r.spy)}</b></div>
+      <div class="pl"><span>${r.alt ? 'Agents’ word' : 'Secret word'}</span><b>${esc(r.secret)}</b></div>
+      ${r.alt ? `<div class="pl"><span>Spy’s word</span><b>${esc(r.alt)}</b></div>` : ''}
+      <div class="pl"><span>Category</span><b>${esc(r.cat)}</b></div></div>
+    ${r.tally.length ? `<div class="card"><h2>Votes</h2>${r.tally.map(t => `<div class="pl"><span>${esc(t[0])}</span><b>${t[1]}</b></div>`).join('')}</div>` : ''}
+    ${V.host ? '<button class="btn" onclick="send({t:\'again\'})">Play again</button>' : '<p class="mut" style="text-align:center">Waiting for the host to start another round…</p>'}
+    <div class="link" onclick="location.reload()">Leave game</div>`;
+}
+
+/* ===================== PRESS & HOLD + TIMER ===================== */
+const setHold = on => { held = on; document.querySelectorAll('[data-hold]').forEach(el => el.classList.toggle('on', on)); };
+document.addEventListener('pointerdown', e => { if(e.target.closest('[data-hold]')){ e.preventDefault(); setHold(true); } });
+['pointerup','pointercancel'].forEach(t => document.addEventListener(t, () => setHold(false)));
+window.addEventListener('blur', () => setHold(false));
+document.addEventListener('contextmenu', e => { if(e.target.closest('[data-hold]')) e.preventDefault(); });
+
+setInterval(() => {
+  if(!V || V.phase !== 'play') return;
+  const s = Math.max(0, Math.round((V.endAt - Date.now()) / 1000)), el = $('#tm');
+  if(el){ el.textContent = Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); el.style.color = s < 30 ? 'var(--red)' : ''; }
+  if(s <= 0 && G && G.phase === 'play') startVote();   // time's up -> everyone votes
+}, 500);
+
+render();
+</script>
+</body>
+</html>
